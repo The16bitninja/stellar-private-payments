@@ -891,7 +891,9 @@ dependencies = [
  "ark-groth16",
  "ark-relations",
  "ark-std 0.6.0",
+ "circuit-keys",
  "contract-types",
+ "serde_json",
  "soroban-sdk",
  "soroban-utils",
 ]
