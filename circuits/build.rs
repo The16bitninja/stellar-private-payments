@@ -45,7 +45,11 @@ const CURVE_ID: &str = "bn128";
 /// Circom stems whose Groth16 artifacts live under `testdata/`
 /// (`{stem}_proving_key.bin`, etc.). Append here when wiring a new entry-point
 /// through the same key-generation path.
-const GROTH16_KEY_CIRCUITS: &[&str] = &["policy_tx_2_2", "selectiveDisclosure_1"];
+const GROTH16_KEY_CIRCUITS: &[&str] = &[
+    "policy_tx_2_2",
+    "selectiveDisclosure_1",
+    "selectiveDisclosureAudit",
+];
 
 /// `testdata/` filenames (`{stem}{suffix}`) that invalidate the build when
 /// changed.
