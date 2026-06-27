@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "app/crates/core/audit",
     "app/crates/core/disclosure",
     "app/crates/core/prover",
     "app/crates/core/state",
@@ -38,6 +39,7 @@ ark-std = { version = "0.6.0", default-features = false, features = ["std"] }
 asp-membership = { path = "contracts/asp-membership" }
 asp-non-membership = { path = "contracts/asp-non-membership" }
 async-trait = { version = "0.1.89", default-features = false }
+audit = { path = "app/crates/core/audit" }
 cfg-if = { version = "1", default-features = false }
 circom-groth16-verifier = { path = "contracts/circom-groth16-verifier" }
 circuit-keys = { path = "circuit-keys" }

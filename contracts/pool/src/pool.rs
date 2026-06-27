@@ -53,6 +53,10 @@ pub enum Error {
     Overflow = 12,
     /// Public input is not canonical in the BN254 scalar field
     NonCanonicalPublicInput = 13,
+    /// Auditor Baby JubJub view key has not been configured
+    AuditorKeyNotSet = 14,
+    /// Disclosure ciphertext does not have the expected length (4 elements)
+    WrongCiphertextLen = 15,
 }
 
 /// Conversion from MerkleTreeWithHistory errors to pool contract errors
@@ -175,6 +179,8 @@ pub(crate) enum DataKey {
     ASPMembership,
     /// Address of the ASP Non-Membership contract
     ASPNonMembership,
+    /// Contract-pinned auditor Baby JubJub view key (`A_pub`)
+    AuditorPubKey,
 }
 
 /// Event emitted when a new commitment is added to the Merkle tree
@@ -202,6 +208,40 @@ pub struct NewNullifierEvent {
     /// The nullifier that was spent
     #[topic]
     pub nullifier: U256,
+}
+
+/// A point on the Baby JubJub curve, in affine coordinates.
+///
+/// Both coordinates are BN254 scalar-field elements. Used for the auditor's
+/// pinned view key `A_pub` and the per-disclosure ephemeral key `R = r·G`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BjjPoint {
+    /// x-coordinate (BN254 field element)
+    pub x: U256,
+    /// y-coordinate (BN254 field element)
+    pub y: U256,
+}
+
+/// Event emitted when a note is verifiably disclosed to the auditor.
+///
+/// Carries the auditor's data feed for one note: the on-chain `commitment`, the
+/// ephemeral Baby JubJub key `R = r·G`, and the ciphertext `C_aud` that — by the
+/// off-chain `selectiveDisclosureAudit` Groth16 proof — is guaranteed to decrypt
+/// (under `S = a·R`) to exactly the values committed in the note.
+///
+/// Route 2: this event is a transport only. Trust comes from the off-chain proof
+/// verified against the pinned auditor key, not from on-chain verification here.
+#[contractevent]
+#[derive(Clone)]
+pub struct AuditDisclosureEvent {
+    /// The disclosed note commitment (a Merkle-tree member)
+    #[topic]
+    pub commitment: U256,
+    /// Ephemeral Baby JubJub public key `R = r·G`
+    pub ephemeral_pub_key: BjjPoint,
+    /// Verifiable ciphertext `C_aud = [c0, c1, c2, tag]`
+    pub ciphertext: Vec<U256>,
 }
 
 /// Privacy Pool Contract
@@ -804,5 +844,101 @@ impl PoolContract {
         let asp_address = Self::get_asp_non_membership(env)?;
         let client = ASPNonMembershipClient::new(env, &asp_address);
         Ok(client.get_root())
+    }
+
+    // ========== Auditor Verifiable Disclosure (Lumenveil, Route 2) ==========
+
+    /// Set (or rotate) the contract-pinned auditor Baby JubJub view key.
+    ///
+    /// Pinning the key on-chain is the one subtle correctness requirement of the
+    /// scheme: senders prove `selectiveDisclosureAudit` against this key as a
+    /// public input, so a sender cannot verifiably encrypt to a key of their own
+    /// choosing and blind the auditor. Requires admin authorization.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment
+    /// * `key` - The auditor's Baby JubJub public key `A_pub = a·G`
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or `NonCanonicalPublicInput` if either
+    /// coordinate is outside the BN254 scalar field.
+    pub fn set_auditor_pubkey(env: &Env, key: BjjPoint) -> Result<(), Error> {
+        let admin = Self::get_admin(env)?;
+        admin.require_auth();
+
+        let modulus = bn256_modulus(env);
+        Self::validate_bn256_public_input(&key.x, &modulus)?;
+        Self::validate_bn256_public_input(&key.y, &modulus)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::AuditorPubKey, &key);
+        Ok(())
+    }
+
+    /// Return the contract-pinned auditor Baby JubJub view key.
+    ///
+    /// # Returns
+    ///
+    /// Returns the configured key, or `AuditorKeyNotSet` if none is configured.
+    pub fn auditor_pubkey(env: &Env) -> Result<BjjPoint, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AuditorPubKey)
+            .ok_or(Error::AuditorKeyNotSet)
+    }
+
+    /// Emit a verifiable auditor disclosure for one note.
+    ///
+    /// Publishes the auditor's data feed `(commitment, R, C_aud)` as an
+    /// [`AuditDisclosureEvent`]. The disclosure is bound to the auditor by the
+    /// off-chain `selectiveDisclosureAudit` Groth16 proof (verified by the
+    /// auditor against the pinned key); this entry point is the transport and
+    /// only performs cheap, structural validation. It requires the auditor key
+    /// to be configured, the ciphertext to have exactly four elements, and all
+    /// field elements to be canonical.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment
+    /// * `commitment` - The disclosed note commitment
+    /// * `ephemeral_pub_key` - The ephemeral Baby JubJub key `R = r·G`
+    /// * `ciphertext` - The verifiable ciphertext `C_aud = [c0, c1, c2, tag]`
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the auditor key is not set,
+    /// the ciphertext length is wrong, or any field element is non-canonical.
+    pub fn disclose(
+        env: &Env,
+        commitment: U256,
+        ephemeral_pub_key: BjjPoint,
+        ciphertext: Vec<U256>,
+    ) -> Result<(), Error> {
+        // The pinned auditor key must exist for a disclosure to be meaningful.
+        let _ = Self::auditor_pubkey(env)?;
+
+        if ciphertext.len() != 4 {
+            return Err(Error::WrongCiphertextLen);
+        }
+
+        let modulus = bn256_modulus(env);
+        Self::validate_bn256_public_input(&commitment, &modulus)?;
+        Self::validate_bn256_public_input(&ephemeral_pub_key.x, &modulus)?;
+        Self::validate_bn256_public_input(&ephemeral_pub_key.y, &modulus)?;
+        for c in ciphertext.iter() {
+            Self::validate_bn256_public_input(&c, &modulus)?;
+        }
+
+        AuditDisclosureEvent {
+            commitment,
+            ephemeral_pub_key,
+            ciphertext,
+        }
+        .publish(env);
+
+        Ok(())
     }
 }

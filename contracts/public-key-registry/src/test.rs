@@ -131,3 +131,109 @@ fn register_rejects_short_note_key() {
     env.mock_all_auths();
     client.register(&account);
 }
+
+// ===== Auditor Baby JubJub key registration (Lumenveil) =====
+
+fn auditor_key(env: &Env, x_fill: u8, y_fill: u8) -> AuditorKey {
+    AuditorKey {
+        x: Bytes::from_array(env, &[x_fill; 32]),
+        y: Bytes::from_array(env, &[y_fill; 32]),
+    }
+}
+
+#[test]
+fn auditor_key_is_none_before_registration() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+
+    assert_eq!(client.auditor_key(), None);
+}
+
+#[test]
+fn register_auditor_saves_and_returns_key() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+    let auditor = Address::generate(&env);
+    let key = auditor_key(&env, 0xAA, 0xBB);
+
+    env.mock_all_auths();
+    client.register_auditor(&auditor, &key);
+
+    assert_eq!(client.auditor_key(), Some(key));
+}
+
+#[test]
+fn register_auditor_emits_event() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+    let auditor = Address::generate(&env);
+    let key = auditor_key(&env, 0xAA, 0xBB);
+
+    env.mock_all_auths();
+    client.register_auditor(&auditor, &key);
+
+    assert_eq!(env.events().all().events().len(), 1);
+}
+
+#[test]
+fn register_auditor_overwrites_previous_key() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+    let auditor = Address::generate(&env);
+    let first = auditor_key(&env, 0x11, 0x22);
+    let rotated = auditor_key(&env, 0x33, 0x44);
+
+    env.mock_all_auths();
+    client.register_auditor(&auditor, &first);
+    client.register_auditor(&auditor, &rotated);
+
+    assert_eq!(client.auditor_key(), Some(rotated));
+}
+
+#[test]
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn register_auditor_requires_auth() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+    let auditor = Address::generate(&env);
+    let key = auditor_key(&env, 0xAA, 0xBB);
+
+    client.register_auditor(&auditor, &key);
+}
+
+#[test]
+#[should_panic]
+fn register_auditor_rejects_short_x() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+    let auditor = Address::generate(&env);
+    let key = AuditorKey {
+        x: Bytes::from_slice(&env, &[0xAA; 31]),
+        y: Bytes::from_array(&env, &[0xBB; 32]),
+    };
+
+    env.mock_all_auths();
+    client.register_auditor(&auditor, &key);
+}
+
+#[test]
+#[should_panic]
+fn register_auditor_rejects_short_y() {
+    let env = Env::default();
+    let contract_id = env.register(PublicKeyRegistry, ());
+    let client = PublicKeyRegistryClient::new(&env, &contract_id);
+    let auditor = Address::generate(&env);
+    let key = AuditorKey {
+        x: Bytes::from_array(&env, &[0xAA; 32]),
+        y: Bytes::from_slice(&env, &[0xBB; 31]),
+    };
+
+    env.mock_all_auths();
+    client.register_auditor(&auditor, &key);
+}

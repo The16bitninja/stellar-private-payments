@@ -1,0 +1,32 @@
+[package]
+name = "audit"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "audit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lumenveil-auditor"
+path = "src/bin/auditor.rs"
+
+[features]
+# Opt-in prover wiring (pulls the witness calculator + Groth16 prover). The
+# pure crypto library and the auditor binary do not need it.
+prover = ["dep:witness", "dep:prover", "dep:types"]
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+num-bigint = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+zkhash = { workspace = true }
+witness = { workspace = true, optional = true }
+prover = { workspace = true, optional = true }
+types = { workspace = true, optional = true }

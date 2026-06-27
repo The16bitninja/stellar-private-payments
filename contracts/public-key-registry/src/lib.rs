@@ -36,10 +36,42 @@ pub struct PublicKeyEvent {
     pub note_key: Bytes,
 }
 
+/// Auditor's Baby JubJub public key for verifiable selective disclosure.
+///
+/// `A_pub = a · G` on Baby JubJub (the curve embedded in BN254's scalar field).
+/// Senders perform in-circuit ECDH against this key to verifiably encrypt the
+/// disclosed note to the auditor. Both coordinates are 32-byte big-endian BN254
+/// field elements.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditorKey {
+    /// Baby JubJub public key x-coordinate (32 bytes, big-endian)
+    pub x: Bytes,
+    /// Baby JubJub public key y-coordinate (32 bytes, big-endian)
+    pub y: Bytes,
+}
+
+/// Event emitted when the auditor registers (or rotates) their Baby JubJub key.
+///
+/// Lets clients and the auditor tool discover the canonical auditor view key.
+#[contractevent]
+#[derive(Clone)]
+pub struct AuditorKeyEvent {
+    /// Address of the auditor that registered the key
+    #[topic]
+    pub auditor: Address,
+    /// Baby JubJub public key x-coordinate (32 bytes, big-endian)
+    pub key_x: Bytes,
+    /// Baby JubJub public key y-coordinate (32 bytes, big-endian)
+    pub key_y: Bytes,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum DataKey {
     Registration(Address),
+    /// Single global slot for the auditor's Baby JubJub view key
+    Auditor,
 }
 
 #[contracttype]
@@ -86,6 +118,30 @@ impl PublicKeyRegistry {
             note_key: account.note_key,
         }
         .publish(&env);
+    }
+
+    /// Register (or rotate) the auditor's Baby JubJub view key.
+    ///
+    /// Stores the key in the single global auditor slot and emits an
+    /// [`AuditorKeyEvent`] for discovery. Requires authorization from the
+    /// `auditor` address.
+    pub fn register_auditor(env: Env, auditor: Address, key: AuditorKey) {
+        auditor.require_auth();
+        assert_eq!(key.x.len(), 32);
+        assert_eq!(key.y.len(), 32);
+
+        env.storage().persistent().set(&DataKey::Auditor, &key);
+        AuditorKeyEvent {
+            auditor,
+            key_x: key.x,
+            key_y: key.y,
+        }
+        .publish(&env);
+    }
+
+    /// Return the registered auditor Baby JubJub view key, if any.
+    pub fn auditor_key(env: Env) -> Option<AuditorKey> {
+        env.storage().persistent().get(&DataKey::Auditor)
     }
 }
 

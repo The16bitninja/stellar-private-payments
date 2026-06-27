@@ -1,5 +1,5 @@
 use crate::{
-    Error, ExtData, PoolContract, PoolContractClient, Proof,
+    BjjPoint, Error, ExtData, PoolContract, PoolContractClient, Proof,
     merkle_with_history::{MerkleDataKey, MerkleTreeWithHistory},
 };
 use asp_membership::{ASPMembership, ASPMembershipClient};
@@ -8,7 +8,7 @@ use circom_groth16_verifier::{CircomGroth16Verifier, Groth16Proof};
 use soroban_sdk::{
     Address, Bytes, BytesN, Env, I256, U256, Vec,
     crypto::bn254::{Bn254G1Affine as G1Affine, Bn254G2Affine as G2Affine},
-    testutils::Address as _,
+    testutils::{Address as _, Events as _},
     xdr::ToXdr,
 };
 use soroban_utils::{constants::bn256_modulus, utils::MockToken};
@@ -637,6 +637,179 @@ fn transact_does_not_reject_boundary_canonical_public_input() {
 
     assert!(!matches!(
         pool.try_transact(&proof, &ext, &sender),
+        Err(Ok(Error::NonCanonicalPublicInput))
+    ));
+}
+
+// ===== Auditor verifiable-disclosure (Lumenveil, Route 2) =====
+
+fn mk_bjj(env: &Env, x: u32, y: u32) -> BjjPoint {
+    BjjPoint {
+        x: U256::from_u32(env, x),
+        y: U256::from_u32(env, y),
+    }
+}
+
+fn mk_ciphertext(env: &Env, vals: &[u32]) -> Vec<U256> {
+    let mut v: Vec<U256> = Vec::new(env);
+    for &x in vals {
+        v.push_back(U256::from_u32(env, x));
+    }
+    v
+}
+
+#[test]
+fn auditor_pubkey_unset_returns_error() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+
+    assert!(matches!(
+        pool.try_auditor_pubkey(),
+        Err(Ok(Error::AuditorKeyNotSet))
+    ));
+}
+
+#[test]
+fn set_auditor_pubkey_stores_and_returns() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+    let key = mk_bjj(&env, 0xA1, 0xB2);
+
+    env.mock_all_auths();
+    pool.set_auditor_pubkey(&key);
+
+    assert_eq!(pool.auditor_pubkey(), key);
+}
+
+#[test]
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn set_auditor_pubkey_requires_admin() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+    let key = mk_bjj(&env, 0xA1, 0xB2);
+
+    pool.set_auditor_pubkey(&key);
+}
+
+#[test]
+fn set_auditor_pubkey_rejects_non_canonical() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+    let key = BjjPoint {
+        x: bn256_modulus(&env),
+        y: U256::from_u32(&env, 1),
+    };
+
+    env.mock_all_auths();
+    assert!(matches!(
+        pool.try_set_auditor_pubkey(&key),
+        Err(Ok(Error::NonCanonicalPublicInput))
+    ));
+}
+
+#[test]
+fn disclose_emits_event_when_auditor_configured() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+
+    env.mock_all_auths();
+    pool.set_auditor_pubkey(&mk_bjj(&env, 0xA1, 0xB2));
+
+    let commitment = U256::from_u32(&env, 0xC0FFEE);
+    let r = mk_bjj(&env, 0x11, 0x22);
+    let ciphertext = mk_ciphertext(&env, &[0x01, 0x02, 0x03, 0x04]);
+    pool.disclose(&commitment, &r, &ciphertext);
+
+    assert_eq!(env.events().all().events().len(), 1);
+}
+
+#[test]
+fn disclose_fails_when_auditor_not_configured() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+
+    let commitment = U256::from_u32(&env, 0xC0FFEE);
+    let r = mk_bjj(&env, 0x11, 0x22);
+    let ciphertext = mk_ciphertext(&env, &[0x01, 0x02, 0x03, 0x04]);
+
+    assert!(matches!(
+        pool.try_disclose(&commitment, &r, &ciphertext),
+        Err(Ok(Error::AuditorKeyNotSet))
+    ));
+}
+
+#[test]
+fn disclose_rejects_wrong_ciphertext_length() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+
+    env.mock_all_auths();
+    pool.set_auditor_pubkey(&mk_bjj(&env, 0xA1, 0xB2));
+
+    let commitment = U256::from_u32(&env, 0xC0FFEE);
+    let r = mk_bjj(&env, 0x11, 0x22);
+    let ciphertext = mk_ciphertext(&env, &[0x01, 0x02, 0x03]); // only 3, must be 4
+
+    assert!(matches!(
+        pool.try_disclose(&commitment, &r, &ciphertext),
+        Err(Ok(Error::WrongCiphertextLen))
+    ));
+}
+
+#[test]
+fn disclose_rejects_non_canonical_commitment() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+
+    env.mock_all_auths();
+    pool.set_auditor_pubkey(&mk_bjj(&env, 0xA1, 0xB2));
+
+    let commitment = bn256_modulus(&env); // non-canonical
+    let r = mk_bjj(&env, 0x11, 0x22);
+    let ciphertext = mk_ciphertext(&env, &[0x01, 0x02, 0x03, 0x04]);
+
+    assert!(matches!(
+        pool.try_disclose(&commitment, &r, &ciphertext),
+        Err(Ok(Error::NonCanonicalPublicInput))
+    ));
+}
+
+#[test]
+fn disclose_rejects_non_canonical_ciphertext_element() {
+    let env = test_env();
+    let setup = setup_test_contracts(&env);
+    let pool_id = register_pool(&env, &setup, U256::from_u32(&env, 1000), 8);
+    let pool = PoolContractClient::new(&env, &pool_id);
+
+    env.mock_all_auths();
+    pool.set_auditor_pubkey(&mk_bjj(&env, 0xA1, 0xB2));
+
+    let commitment = U256::from_u32(&env, 0xC0FFEE);
+    let r = mk_bjj(&env, 0x11, 0x22);
+    let mut ciphertext: Vec<U256> = Vec::new(&env);
+    ciphertext.push_back(U256::from_u32(&env, 0x01));
+    ciphertext.push_back(U256::from_u32(&env, 0x02));
+    ciphertext.push_back(U256::from_u32(&env, 0x03));
+    ciphertext.push_back(bn256_modulus(&env)); // non-canonical tag
+
+    assert!(matches!(
+        pool.try_disclose(&commitment, &r, &ciphertext),
         Err(Ok(Error::NonCanonicalPublicInput))
     ));
 }
