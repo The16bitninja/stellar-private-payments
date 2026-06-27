@@ -10,6 +10,7 @@ publish = false
 anyhow = { workspace = true }
 asp-membership = { workspace = true }
 asp-non-membership = { workspace = true }
+audit = { workspace = true }
 circom-groth16-verifier = { workspace = true }
 # Circuit dependencies
 circuits = { workspace = true, features = ["std"] }

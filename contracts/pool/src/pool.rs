@@ -242,6 +242,9 @@ pub struct AuditDisclosureEvent {
     pub ephemeral_pub_key: BjjPoint,
     /// Verifiable ciphertext `C_aud = [c0, c1, c2, tag]`
     pub ciphertext: Vec<U256>,
+    /// Disclosure context hash — the encryption nonce the auditor needs to
+    /// decrypt `C_aud` (a public input to the audit proof).
+    pub ext_context_hash: U256,
 }
 
 /// Privacy Pool Contract
@@ -906,6 +909,7 @@ impl PoolContract {
     /// * `commitment` - The disclosed note commitment
     /// * `ephemeral_pub_key` - The ephemeral Baby JubJub key `R = r·G`
     /// * `ciphertext` - The verifiable ciphertext `C_aud = [c0, c1, c2, tag]`
+    /// * `ext_context_hash` - The disclosure context hash / encryption nonce
     ///
     /// # Returns
     ///
@@ -916,6 +920,7 @@ impl PoolContract {
         commitment: U256,
         ephemeral_pub_key: BjjPoint,
         ciphertext: Vec<U256>,
+        ext_context_hash: U256,
     ) -> Result<(), Error> {
         // The pinned auditor key must exist for a disclosure to be meaningful.
         let _ = Self::auditor_pubkey(env)?;
@@ -928,6 +933,7 @@ impl PoolContract {
         Self::validate_bn256_public_input(&commitment, &modulus)?;
         Self::validate_bn256_public_input(&ephemeral_pub_key.x, &modulus)?;
         Self::validate_bn256_public_input(&ephemeral_pub_key.y, &modulus)?;
+        Self::validate_bn256_public_input(&ext_context_hash, &modulus)?;
         for c in ciphertext.iter() {
             Self::validate_bn256_public_input(&c, &modulus)?;
         }
@@ -936,6 +942,7 @@ impl PoolContract {
             commitment,
             ephemeral_pub_key,
             ciphertext,
+            ext_context_hash,
         }
         .publish(env);
 
