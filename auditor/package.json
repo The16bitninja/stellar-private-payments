@@ -5,11 +5,13 @@
   "type": "module",
   "description": "Scans pool AuditDisclosureEvents from Stellar RPC and feeds the lumenveil-auditor tool",
   "bin": {
-    "lumenveil-scan": "scan.mjs"
+    "lumenveil-scan": "scan.mjs",
+    "lumenveil-disclose-submit": "disclose.mjs"
   },
   "scripts": {
     "test": "node --test",
-    "scan": "node scan.mjs"
+    "scan": "node scan.mjs",
+    "disclose": "node disclose.mjs"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^14.4.2"

@@ -614,6 +614,7 @@ dependencies = [
  "anyhow",
  "ark-bn254 0.6.0",
  "ark-ff 0.6.0",
+ "hex",
  "num-bigint",
  "prover",
  "serde",
