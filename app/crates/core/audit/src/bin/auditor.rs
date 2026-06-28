@@ -17,13 +17,30 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let result = match args.get(1).map(String::as_str) {
-        Some("gen-demo") => gen_demo(args.get(2).map(String::as_str)),
-        Some("-h") | Some("--help") | None => {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .filter(|a| !a.starts_with("--"))
+        .map(String::as_str)
+        .collect();
+
+    let result = match positional.first().copied() {
+        Some("gen-demo") => gen_demo(positional.get(1).copied()),
+        None if !json => {
             print_usage();
             return ExitCode::SUCCESS;
         }
+        Some("-h") => {
+            print_usage();
+            return ExitCode::SUCCESS;
+        }
+        Some(path) if json => run_json(path),
         Some(path) => run(path),
+        None => {
+            print_usage();
+            return ExitCode::SUCCESS;
+        }
     };
 
     match result {
@@ -77,6 +94,40 @@ fn run(path: &str) -> Result<usize> {
 
     let recovered = total.saturating_sub(failures);
     println!("\nReconstructed ledger: {recovered}/{total} note(s) recovered.");
+    Ok(failures)
+}
+
+/// Reconstruct and emit the ledger as a JSON array (for tooling / the UI).
+/// Returns the number of records that failed to reconstruct.
+fn run_json(path: &str) -> Result<usize> {
+    let raw = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
+    let input: AuditorInput =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {path}"))?;
+
+    let outcomes = audit_all(&input)?;
+    let mut failures = 0usize;
+    let mut entries: Vec<serde_json::Value> = Vec::with_capacity(outcomes.len());
+    for outcome in &outcomes {
+        match &outcome.recovered {
+            Some(note) => entries.push(serde_json::json!({
+                "commitment": outcome.commitment,
+                "ok": true,
+                "amount": note.amount.to_string(),
+                "blinding": note.blinding.to_string(),
+                "public_key": note.public_key.to_string(),
+            })),
+            None => {
+                failures = failures.saturating_add(1);
+                entries.push(serde_json::json!({
+                    "commitment": outcome.commitment,
+                    "ok": false,
+                    "error": outcome.error,
+                }));
+            }
+        }
+    }
+
+    println!("{}", serde_json::to_string(&entries)?);
     Ok(failures)
 }
 
