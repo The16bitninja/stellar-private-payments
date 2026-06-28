@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #07070c;
+  --color-foreground: #fafafb;
+  --color-card: #0c0c14;
+  --color-muted: #16161f;
+  --color-muted-foreground: #9a9aae;
+  --color-border: #ffffff14;
+  --color-primary: #a78bfa;
+  --color-primary-foreground: #0a0a12;
+  --color-ring: #8b5cf6;
+
+  --color-veil-violet: #8b5cf6;
+  --color-veil-indigo: #6366f1;
+  --color-veil-cyan: #22d3ee;
+  --color-veil-emerald: #34d399;
+  --color-veil-amber: #fbbf24;
+  --color-veil-rose: #fb7185;
+
+  --animate-aurora: aurora 16s ease-in-out infinite;
+  --animate-floaty: floaty 6s ease-in-out infinite;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-gradient-x: gradient-x 7s ease infinite;
+  --animate-dash: dash 2.5s linear infinite;
+}
+
+@keyframes aurora {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.55; }
+  50% { transform: translate3d(5%, -4%, 0) scale(1.18); opacity: 0.82; }
+}
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+@keyframes gradient-x {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+@keyframes dash {
+  to { stroke-dashoffset: -220; }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-veil-violet) 35%, transparent);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: #2a2a38;
+  border-radius: 9999px;
+  border: 2px solid var(--color-background);
+}
+::-webkit-scrollbar-thumb:hover { background: #3a3a4c; }
+
+/* ---- component utilities ---- */
+@layer utilities {
+  .glass {
+    background: linear-gradient(180deg, rgba(20, 20, 30, 0.72), rgba(10, 10, 16, 0.6));
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .ring-card {
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+      0 30px 80px -50px rgba(139, 92, 246, 0.45);
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+    background-size: 46px 46px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 45%, transparent 100%);
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 45%, transparent 100%);
+  }
+  .text-gradient {
+    background-image: linear-gradient(110deg, #fff 8%, #c4b5fd 38%, #67e8f9 68%, #fff 96%);
+    background-size: 220% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .text-gradient-violet {
+    background-image: linear-gradient(110deg, #a78bfa, #22d3ee);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .glow-violet {
+    box-shadow: 0 0 60px -12px rgba(167, 139, 250, 0.55);
+  }
+}
