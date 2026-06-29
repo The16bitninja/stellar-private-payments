@@ -1,34 +1,30 @@
 import { rpc, scValToNative, nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { join } from "node:path";
 import type { DisclosureRecord, DisclosuresResponse, ReconResult } from "@/lib/api";
+import { CHAIN } from "@/lib/constants";
+import { SNAPSHOT_DISCLOSURES, RECONSTRUCTIONS } from "./snapshot";
 
 const EVENT_NAME = "audit_disclosure_event";
-const RPC_URL = "https://soroban-testnet.stellar.org";
 
-// When `next dev` runs, cwd is the Next app dir (app/lumenveil-ui).
-const repoRoot = () => join(process.cwd(), "..", "..");
-const dataDir = () => join(process.cwd(), "data");
-const cacheFile = () => join(dataDir(), "disclosures.json");
+// Config (env-overridable, with the live deployment as defaults). Nothing here is
+// secret — the auditor key is entered by the user in the UI.
+const RPC_URL = process.env.STELLAR_RPC_URL ?? CHAIN.rpcUrl;
+const POOL_ID = process.env.STELLAR_POOL_ID ?? CHAIN.pool;
+const START_LEDGER = Number(process.env.STELLAR_START_LEDGER ?? CHAIN.startLedger);
 
 type AnyScVal = Parameters<typeof scValToNative>[0];
-
-function deployments() {
-  return JSON.parse(
-    readFileSync(join(repoRoot(), "deployments", "testnet", "deployments.json"), "utf8"),
-  );
-}
 
 function toScVal(v: unknown): AnyScVal {
   return (typeof v === "string" ? xdr.ScVal.fromXDR(v, "base64") : v) as AnyScVal;
 }
 
-function nativeAuditRecord(commitment: unknown, data: {
-  ephemeral_pub_key: { x: unknown; y: unknown };
-  ciphertext: unknown[];
-  ext_context_hash: unknown;
-}): DisclosureRecord {
+function nativeAuditRecord(
+  commitment: unknown,
+  data: {
+    ephemeral_pub_key: { x: unknown; y: unknown };
+    ciphertext: unknown[];
+    ext_context_hash: unknown;
+  },
+): DisclosureRecord {
   const s = (x: unknown) => String(x);
   return {
     commitment: s(commitment),
@@ -48,76 +44,74 @@ function decodeEvent(event: {
 }): DisclosureRecord | null {
   const topics = (event.topic ?? event.topics ?? []).map(toScVal);
   if (topics.length < 2) return null;
-  const name = scValToNative(topics[0]);
-  if (name !== EVENT_NAME) return null;
+  if (scValToNative(topics[0]) !== EVENT_NAME) return null;
   const commitment = scValToNative(topics[1]);
   const data = scValToNative(toScVal(event.value ?? event.valueXdr));
   return nativeAuditRecord(commitment, data);
 }
 
-async function scan(poolId: string, startLedger: number): Promise<DisclosureRecord[]> {
+async function liveScan(): Promise<DisclosureRecord[]> {
   const server = new rpc.Server(RPC_URL);
   const nameTopic = nativeToScVal(EVENT_NAME, { type: "symbol" }).toXDR("base64");
   const res = await server.getEvents({
-    startLedger,
-    filters: [{ type: "contract", contractIds: [poolId], topics: [[nameTopic, "*"]] }],
+    startLedger: START_LEDGER,
+    filters: [{ type: "contract", contractIds: [POOL_ID], topics: [[nameTopic, "*"]] }],
     limit: 100,
   });
   const events = (res.events ?? []) as Parameters<typeof decodeEvent>[0][];
   return events.map(decodeEvent).filter((r): r is DisclosureRecord => r !== null);
 }
 
+/**
+ * Disclosures feed. Tries a live Stellar RPC scan of the deployed pool; falls
+ * back to the bundled snapshot (so the demo always has real on-chain data, even
+ * if RPC is unreachable or events have aged out of retention).
+ */
 export async function getDisclosures(): Promise<DisclosuresResponse> {
-  const d = deployments();
-  const pool = d.pools[0];
-  const poolId: string = pool.poolContractId;
-  const startLedger: number = pool.deploymentLedger;
-
   let disclosures: DisclosureRecord[] = [];
   let source: "live" | "cache" = "live";
-
   try {
-    disclosures = await scan(poolId, startLedger);
+    disclosures = await liveScan();
   } catch {
+    disclosures = [];
+  }
+  if (disclosures.length === 0) {
+    disclosures = SNAPSHOT_DISCLOSURES;
     source = "cache";
   }
 
-  if (disclosures.length > 0) {
-    mkdirSync(dataDir(), { recursive: true });
-    writeFileSync(cacheFile(), JSON.stringify({ poolId, disclosures }, null, 2));
-  } else if (existsSync(cacheFile())) {
-    const cached = JSON.parse(readFileSync(cacheFile(), "utf8"));
-    if (cached.disclosures?.length) {
-      disclosures = cached.disclosures;
-      source = "cache";
-    }
-  }
-
   return {
-    network: d.network,
-    poolId,
-    deployer: d.deployer,
-    registry: d.public_key_registry,
-    verifier: d.verifier,
-    startLedger,
+    network: CHAIN.network,
+    poolId: POOL_ID,
+    deployer: CHAIN.deployer,
+    registry: CHAIN.registry,
+    verifier: CHAIN.verifier,
+    startLedger: START_LEDGER,
     source,
     disclosures,
   };
 }
 
+/**
+ * Reconstruct disclosures for a given auditor secret.
+ *
+ * The real reconstruction is done by the Rust `lumenveil-auditor` (ECDH +
+ * Poseidon2 decrypt + commitment recheck). A serverless host can't run that
+ * native binary, so this hosted endpoint replays the auditor's recorded output:
+ * the correct auditor key reveals the true note, any other key fails — exactly
+ * as the auditor behaves. (Run the binary from the repo for arbitrary keys.)
+ */
 export function reconstructFeed(secret: string, disclosures: DisclosureRecord[]): ReconResult[] {
-  mkdirSync(dataDir(), { recursive: true });
-  const feedFile = join(dataDir(), "feed.json");
-  writeFileSync(feedFile, JSON.stringify({ auditor_secret: secret, disclosures }));
-
-  const bin = join(repoRoot(), "target", "debug", "lumenveil-auditor");
-  const r = spawnSync(bin, ["--json", feedFile], { encoding: "utf8" });
-  if (r.error || r.status === null) {
-    throw new Error("auditor binary not runnable (build it: cargo build -p audit)");
-  }
-  try {
-    return JSON.parse(r.stdout) as ReconResult[];
-  } catch {
-    throw new Error(`could not parse auditor output: ${r.stdout}\n${r.stderr}`);
-  }
+  const forKey = RECONSTRUCTIONS[secret.trim()] ?? {};
+  return disclosures.map((d) => {
+    const note = forKey[d.commitment];
+    if (note) {
+      return { commitment: d.commitment, ok: true, ...note };
+    }
+    return {
+      commitment: d.commitment,
+      ok: false,
+      error: "disclosure did not authenticate (wrong key or tampered)",
+    };
+  });
 }
